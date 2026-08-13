@@ -33,6 +33,16 @@ def load_tab_bar():
         return runpy.run_path(str(ROOT / "kitty/tab_bar.py"))
 
 
+class FakeColor:
+    def __getattr__(self, name):
+        return f"<{name}>"
+
+
+class FakeFmt:
+    def __init__(self):
+        self.fg = FakeColor()
+
+
 def load_watcher():
     notifications = types.ModuleType("kitty.notifications")
     notifications.Channel = lambda: types.SimpleNamespace(
@@ -218,6 +228,20 @@ class TabBarTests(unittest.TestCase):
         window.tabref = lambda: tab
         m["_mark_seen_if_visible"](window, m["_decode"](self.raw))
         self.assertNotIn("agent_seen_v1", window.user_vars)
+
+    def test_active_marker_and_unread_marker_are_independent(self):
+        m = load_tab_bar()
+        base = {"tab_id": 7, "title": "T", "fmt": FakeFmt(), "bell_symbol": ""}
+        with mock.patch.dict(m["draw_title"].__globals__, {
+            "_states_for_tab": lambda _id: [], "_is_active_tab": lambda _id: True,
+        }):
+            self.assertTrue(m["draw_title"](base).startswith("<_d97757>▎"))
+        state = m["_decode"](self.raw)
+        item = (types.SimpleNamespace(is_active=True), state, True)
+        with mock.patch.dict(m["draw_title"].__globals__, {
+            "_states_for_tab": lambda _id: [item], "_is_active_tab": lambda _id: True,
+        }):
+            self.assertTrue(m["draw_title"](base).startswith("<_a34b34>•"))
 
 
 if __name__ == "__main__":
