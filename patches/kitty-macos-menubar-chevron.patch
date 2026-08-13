@@ -1,0 +1,14 @@
+diff --git a/kitty/cocoa_window.m b/kitty/cocoa_window.m
+index 79196b18d..7e43febd6 100644
+--- a/kitty/cocoa_window.m
++++ b/kitty/cocoa_window.m
+@@ -939,7 +939,8 @@ - (void)quickAccessTerminal:(NSPasteboard *)pboard userData:(NSString *)userData
+         title = @(PyUnicode_AsUTF8(pytitle));
+     }
+     if (!title) return;
+-    NSString *menuTitle = [NSString stringWithFormat:@" :: %@", title];
++    // Use one quiet separator before the dynamic window title.
++    NSString *menuTitle = [NSString stringWithFormat:@" > %@", title];
+     if (title_menu != NULL) {
+         [[title_menu submenu] setTitle:menuTitle];
+     } else {

@@ -1,0 +1,10 @@
+Kitty Agent Sidebar
+
+The patch under patches/ modifies Kitty, Copyright (C) Kovid Goyal and Kitty contributors.
+Kitty is licensed under GPL-3.0-only. The patch is distributed under the same license.
+
+All project code and both optional Kitty patches are distributed under GPL-3.0-only. The
+patches are not required by the Hook bridge, collector, or tab renderer.
+
+This project interfaces with Codex CLI and Claude Code only through their documented hook
+interfaces. It does not include or modify either agent's source or binaries.

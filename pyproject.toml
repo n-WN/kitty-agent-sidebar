@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kitty-agent-sidebar"
+version = "0.1.0"
+description = "Event-driven Codex and Claude Code session state for Kitty vertical tabs"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "GPL-3.0-only"}
+authors = [{name = "Kitty Agent Sidebar contributors"}]
+classifiers = [
+  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+  "Programming Language :: Python :: 3",
+  "Operating System :: MacOS",
+]
+dependencies = []
+
+[tool.setuptools]
+packages = ["kitty_agent_sidebar"]
+package-dir = {"" = "src"}
+
+[tool.ruff]
+target-version = "py39"
+line-length = 120

@@ -1,0 +1,123 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "@BRIDGE@",
+            "args": [
+              "managed-v1",
+              "claude",
+              "session-start"
+            ],
+            "async": false,
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "@BRIDGE@",
+            "args": [
+              "managed-v1",
+              "claude",
+              "user-prompt-submit"
+            ],
+            "async": false,
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "@BRIDGE@",
+            "args": [
+              "managed-v1",
+              "claude",
+              "permission-request"
+            ],
+            "async": false,
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "@BRIDGE@",
+            "args": [
+              "managed-v1",
+              "claude",
+              "pre-tool-use"
+            ],
+            "async": false,
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "@BRIDGE@",
+            "args": [
+              "managed-v1",
+              "claude",
+              "stop"
+            ],
+            "async": false,
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "@BRIDGE@",
+            "args": [
+              "managed-v1",
+              "claude",
+              "stop-failure"
+            ],
+            "async": false,
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "@BRIDGE@",
+            "args": [
+              "managed-v1",
+              "claude",
+              "session-end"
+            ],
+            "async": false,
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}

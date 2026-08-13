@@ -1,0 +1,416 @@
+diff --git a/kitty/boss.py b/kitty/boss.py
+index 8db000ebf..e1cf97a43 100644
+--- a/kitty/boss.py
++++ b/kitty/boss.py
+@@ -124,6 +124,7 @@
+     set_os_window_chrome,
+     set_os_window_size,
+     set_os_window_title,
++    set_vertical_tab_bar_width,
+     set_tab_being_dragged,
+     set_window_being_dragged,
+     start_drag_with_data,
+@@ -410,6 +411,7 @@ def __init__(
+         talk_fd: int = -1,
+     ):
+         self.drag_resize_of_window = WindowResizeDrag()
++        self.vertical_tab_bar_resize_columns: dict[int, int] = {}
+         self.atexit = Atexit()
+         set_layout_options(opts)
+         self.clipboard = Clipboard()
+@@ -518,6 +520,15 @@ def add_os_window(
+             wclass = self.args.cls or appname
+         tm = TabManager(os_window_id, self.args, wclass, wname, startup_session)
+         self.os_window_map[os_window_id] = tm
++        if get_options().vertical_tab_bar_resize:
++            try:
++                columns = int(self.cached_values.get('vertical-tab-bar-width', 0))
++            except (TypeError, ValueError):
++                columns = 0
++            if columns > 0:
++                self.vertical_tab_bar_resize_columns[os_window_id] = columns
++                set_vertical_tab_bar_width(os_window_id, columns)
++                tm.resize()
+         return os_window_id
+
+     def add_os_panel(self, cfg: LayerShellConfig, wclass: str | None = appname, wname: str | None = appname) -> int:
+@@ -2332,6 +2343,7 @@ def on_os_window_closed(
+         self, os_window_id: int, x: int, y: int, viewport_width: int, viewport_height: int, was_maximized: bool, is_layer_shell: bool
+     ) -> None:
+         tm = self.os_window_map.pop(os_window_id, None)
++        self.vertical_tab_bar_resize_columns.pop(os_window_id, None)
+         opts = get_options()
+         if not is_layer_shell:
+             if opts.remember_window_position and not is_wayland() and not self.os_window_map:
+@@ -2821,6 +2833,31 @@ def drag_resize_end(self) -> None:
+                 cw.pause_resize_notifications_to_child(pause=False)
+         self.drag_resize_of_window = WindowResizeDrag()
+
++    def vertical_tab_bar_resize_start(self, os_window_id: int, columns: int) -> None:
++        if os_window_id in self.os_window_map:
++            self.vertical_tab_bar_resize_columns[os_window_id] = max(1, int(columns))
++
++    def vertical_tab_bar_resize_update(self, os_window_id: int, columns: int) -> None:
++        tm = self.os_window_map.get(os_window_id)
++        if tm is None:
++            return
++        _, _, viewport_width, _, cell_width, _ = viewport_for_window(os_window_id)
++        # Preserve at least twenty terminal columns on the other side of the
++        # divider. The draggable handle itself remains entirely in the bar.
++        max_columns = max(6, viewport_width // max(1, cell_width) - 20)
++        columns = max(6, min(int(columns), max_columns))
++        if columns == self.vertical_tab_bar_resize_columns.get(os_window_id):
++            return
++        self.vertical_tab_bar_resize_columns[os_window_id] = columns
++        set_vertical_tab_bar_width(os_window_id, columns)
++        tm.resize()
++
++    def vertical_tab_bar_resize_end(self, os_window_id: int, columns: int) -> None:
++        columns = max(0, int(columns))
++        if columns > 0:
++            self.vertical_tab_bar_resize_columns[os_window_id] = columns
++            self.cached_values['vertical-tab-bar-width'] = columns
++
+     def open_kitty_website(self) -> None:
+         self.open_url(website_url())
+
+diff --git a/kitty/fast_data_types.pyi b/kitty/fast_data_types.pyi
+index 1a59adb97..7db39aa49 100644
+--- a/kitty/fast_data_types.pyi
++++ b/kitty/fast_data_types.pyi
+@@ -964,6 +964,9 @@ class Region:
+ def viewport_for_window(os_window_id: int) -> Tuple[Region, Region, int, int, int, int]:
+     pass
+
++def set_vertical_tab_bar_width(os_window_id: int, columns: int) -> None:
++    pass
++
+ TermiosPtr = NewType('TermiosPtr', int)
+
+ def raw_tty(fd: int, termios_ptr: TermiosPtr, optional_actions: int = termios.TCSAFLUSH) -> None:
+diff --git a/kitty/mouse.c b/kitty/mouse.c
+index 54afea651..1e86a5e5d 100644
+--- a/kitty/mouse.c
++++ b/kitty/mouse.c
+@@ -20,6 +20,24 @@ static MouseShape mouse_cursor_shape = TEXT_POINTER;
+ typedef enum MouseActions { PRESS, RELEASE, DRAG, MOVE, LEAVE } MouseAction;
+ #define debug debug_input
+
++static bool
++mouse_in_vertical_tab_bar_resize_handle(const OSWindow *osw) {
++    if (!osw || !OPT(vertical_tab_bar_resize) || OPT(tab_bar_hidden) || osw->has_too_few_tabs) return false;
++    if (OPT(tab_bar_edge) != LEFT_EDGE && OPT(tab_bar_edge) != RIGHT_EDGE) return false;
++    Region central = {0}, tab_bar = {0};
++    os_window_regions(osw, &central, &tab_bar);
++    if (osw->mouse_y < tab_bar.top || osw->mouse_y >= tab_bar.bottom) return false;
++    // Keep the complete hit target on the tab-bar side of the divider. This
++    // makes terminal cells adjacent to the divider behave exactly as before.
++    double dpi = osw->fonts_data ? (osw->fonts_data->logical_dpi_x + osw->fonts_data->logical_dpi_y) / 2. : 72.;
++    double hit_width = MAX(3., round(5. * dpi / 72.));
++    // central is the actual visible divider. It includes the inner margin,
++    // unlike tab_bar.right/left. Stay strictly on the sidebar side of it.
++    if (OPT(tab_bar_edge) == LEFT_EDGE)
++        return osw->mouse_x >= MAX((double)tab_bar.left, (double)central.left - hit_width) && osw->mouse_x < central.left;
++    return osw->mouse_x >= central.right && osw->mouse_x < MIN((double)tab_bar.right, (double)central.right + hit_width);
++}
++
+ static void
+ finish_scroll_animation(Screen *screen) {
+     if (screen->callbacks != Py_None) {
+@@ -1152,7 +1170,7 @@ update_mouse_pointer_shape(void) {
+     mouse_cursor_shape = TEXT_POINTER;
+     MouseRegion r = mouse_region(false, true);
+     if (r.in_tab_bar) {
+-        mouse_cursor_shape = POINTER_POINTER;
++        mouse_cursor_shape = mouse_in_vertical_tab_bar_resize_handle(global_state.callback_os_window) ? EW_RESIZE_POINTER : POINTER_POINTER;
+     } else if (r.in_title_bar) {
+         mouse_cursor_shape = POINTER_POINTER;
+     } else if (r.window) {
+@@ -1292,6 +1310,27 @@ mouse_event(const int button, int modifiers, int action) {
+     Window *w = NULL;
+     OSWindow *osw = global_state.callback_os_window;
+
++    if (global_state.vertical_tab_bar_being_resized.os_window_id) {
++        if (!osw || osw->id != global_state.vertical_tab_bar_being_resized.os_window_id) {
++            zero_at_ptr(&global_state.vertical_tab_bar_being_resized);
++        } else if (button < 0) {
++            long delta = (long)floor((osw->mouse_x - global_state.vertical_tab_bar_being_resized.initial_x) /
++                                    MAX(1u, osw->fonts_data->fcm.cell_width));
++            long cols = (long)global_state.vertical_tab_bar_being_resized.initial_cols +
++                        (global_state.vertical_tab_bar_being_resized.edge == LEFT_EDGE ? delta : -delta);
++            call_boss(vertical_tab_bar_resize_update, "Kl", osw->id, cols);
++            mouse_cursor_shape = EW_RESIZE_POINTER;
++            set_mouse_cursor(mouse_cursor_shape);
++            return;
++        } else if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE) {
++            call_boss(vertical_tab_bar_resize_end, "KI", osw->id, osw->vertical_tab_bar_width);
++            zero_at_ptr(&global_state.vertical_tab_bar_being_resized);
++            mouse_cursor_shape = mouse_in_vertical_tab_bar_resize_handle(osw) ? EW_RESIZE_POINTER : DEFAULT_POINTER;
++            set_mouse_cursor(mouse_cursor_shape);
++            return;
++        } else return;
++    }
++
+     if (OPT(debug_keyboard)) {
+         if (button < 0) {
+             debug("%s x: %.1f y: %.1f ", "\x1b[36mMove\x1b[m", osw->mouse_x, osw->mouse_y);
+@@ -1393,8 +1432,19 @@ mouse_event(const int button, int modifiers, int action) {
+     set_currently_hovered_window(w && !r.window_border && !r.in_title_bar ? w->id : 0, modifiers, true);
+
+     if (r.in_tab_bar || global_state.tab_being_dragged.id) {
+-        mouse_cursor_shape = POINTER_POINTER;
+-        handle_tab_bar_mouse(button, modifiers, action);
++        const bool in_resize_handle = r.in_tab_bar && mouse_in_vertical_tab_bar_resize_handle(osw);
++        mouse_cursor_shape = in_resize_handle ? EW_RESIZE_POINTER : POINTER_POINTER;
++        if (in_resize_handle && button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
++            Region central = {0}, tab_bar = {0};
++            os_window_regions(osw, &central, &tab_bar);
++            global_state.vertical_tab_bar_being_resized.os_window_id = osw->id;
++            global_state.vertical_tab_bar_being_resized.initial_cols = MAX(1u, (unsigned)(tab_bar.right - tab_bar.left) / osw->fonts_data->fcm.cell_width);
++            global_state.vertical_tab_bar_being_resized.initial_x = osw->mouse_x;
++            global_state.vertical_tab_bar_being_resized.edge = OPT(tab_bar_edge);
++            call_boss(vertical_tab_bar_resize_start, "KI", osw->id, global_state.vertical_tab_bar_being_resized.initial_cols);
++        } else {
++            handle_tab_bar_mouse(button, modifiers, action);
++        }
+         debug("handled by tab bar\n");
+     } else if ((r.in_title_bar && r.window) || global_state.window_being_dragged.id) {
+         mouse_cursor_shape = POINTER_POINTER;
+diff --git a/kitty/options/definition.py b/kitty/options/definition.py
+index 4a8ce5cce..4e285fb2a 100644
+--- a/kitty/options/definition.py
++++ b/kitty/options/definition.py
+@@ -2232,6 +2232,32 @@
+ """,
+ )
+
++opt(
++    'vertical_tab_bar_width',
++    '0',
++    option_type='positive_int',
++    ctype='int',
++    long_text="""
++The width of a vertical tab bar in cells. A value of zero keeps the automatic
++width derived from :opt:`tab_title_max_length`. When
++:opt:`vertical_tab_bar_resize` is enabled, dragging the tab bar's inner edge
++overrides this value for that OS window. The last interactively selected width
++is restored for new OS windows in later kitty runs.
++""",
++)
++
++opt(
++    'vertical_tab_bar_resize',
++    'no',
++    option_type='to_bool',
++    ctype='bool',
++    long_text="""
++Allow a vertical tab bar to be resized by dragging its edge next to the
++terminal. The hit area is entirely inside the tab bar, so it never captures a
++click from the terminal. The tab bar's outer edge is not a resize handle.
++""",
++)
++
+ opt(
+     'tab_title_max_lines',
+     '1',
+diff --git a/kitty/options/parse.py b/kitty/options/parse.py
+index f40fe848f..fab6b0420 100644
+--- a/kitty/options/parse.py
++++ b/kitty/options/parse.py
+@@ -1498,6 +1498,12 @@ def url_prefixes(self, val: str, ans: dict[str, typing.Any]) -> None:
+     def url_style(self, val: str, ans: dict[str, typing.Any]) -> None:
+         ans['url_style'] = url_style(val)
+
++    def vertical_tab_bar_resize(self, val: str, ans: dict[str, typing.Any]) -> None:
++        ans['vertical_tab_bar_resize'] = to_bool(val)
++
++    def vertical_tab_bar_width(self, val: str, ans: dict[str, typing.Any]) -> None:
++        ans['vertical_tab_bar_width'] = positive_int(val)
++
+     def visual_bell_color(self, val: str, ans: dict[str, typing.Any]) -> None:
+         ans['visual_bell_color'] = to_color_or_none(val)
+
+diff --git a/kitty/options/to-c-generated.h b/kitty/options/to-c-generated.h
+index 26f070e12..97a35e116 100644
+--- a/kitty/options/to-c-generated.h
++++ b/kitty/options/to-c-generated.h
+@@ -4,6 +4,7 @@
+ #include "to-c.h"
+
+
++
+ static void
+ convert_from_python_font_size(PyObject *val, Options *opts) {
+     opts->font_size = PyFloat_AsDouble(val);
+@@ -1135,6 +1136,32 @@ convert_from_opts_tab_title_max_length(PyObject *py_opts, Options *opts) {
+     Py_DECREF(ret);
+ }
+
++static void
++convert_from_python_vertical_tab_bar_width(PyObject *val, Options *opts) {
++    opts->vertical_tab_bar_width = PyLong_AsLong(val);
++}
++
++static void
++convert_from_opts_vertical_tab_bar_width(PyObject *py_opts, Options *opts) {
++    PyObject *ret = PyObject_GetAttrString(py_opts, "vertical_tab_bar_width");
++    if (ret == NULL) return;
++    convert_from_python_vertical_tab_bar_width(ret, opts);
++    Py_DECREF(ret);
++}
++
++static void
++convert_from_python_vertical_tab_bar_resize(PyObject *val, Options *opts) {
++    opts->vertical_tab_bar_resize = PyObject_IsTrue(val);
++}
++
++static void
++convert_from_opts_vertical_tab_bar_resize(PyObject *py_opts, Options *opts) {
++    PyObject *ret = PyObject_GetAttrString(py_opts, "vertical_tab_bar_resize");
++    if (ret == NULL) return;
++    convert_from_python_vertical_tab_bar_resize(ret, opts);
++    Py_DECREF(ret);
++}
++
+ static void
+ convert_from_python_tab_bar_background(PyObject *val, Options *opts) {
+     opts->tab_bar_background = color_or_none_as_int(val);
+@@ -1714,6 +1741,10 @@ convert_opts_from_python_opts(PyObject *py_opts, Options *opts) {
+     if (PyErr_Occurred()) return false;
+     convert_from_opts_tab_title_max_length(py_opts, opts);
+     if (PyErr_Occurred()) return false;
++    convert_from_opts_vertical_tab_bar_width(py_opts, opts);
++    if (PyErr_Occurred()) return false;
++    convert_from_opts_vertical_tab_bar_resize(py_opts, opts);
++    if (PyErr_Occurred()) return false;
+     convert_from_opts_tab_bar_background(py_opts, opts);
+     if (PyErr_Occurred()) return false;
+     convert_from_opts_tab_bar_margin_color(py_opts, opts);
+diff --git a/kitty/options/types.py b/kitty/options/types.py
+index e2e6ff3ad..2cf8e7df4 100644
+--- a/kitty/options/types.py
++++ b/kitty/options/types.py
+@@ -496,6 +496,8 @@
+     'url_excluded_characters',
+     'url_prefixes',
+     'url_style',
++    'vertical_tab_bar_resize',
++    'vertical_tab_bar_width',
+     'visual_bell_color',
+     'visual_bell_duration',
+     'visual_window_select_characters',
+@@ -709,6 +711,8 @@ class Options:
+     url_excluded_characters: str = ''
+     url_prefixes: tuple[str, ...] = ('file', 'ftp', 'ftps', 'gemini', 'git', 'gopher', 'http', 'https', 'irc', 'ircs', 'kitty', 'mailto', 'news', 'sftp', 'ssh')
+     url_style: int = 3
++    vertical_tab_bar_resize: bool = False
++    vertical_tab_bar_width: int = 0
+     visual_bell_color: kitty.fast_data_types.Color | None = None
+     visual_bell_duration: tuple[float, kitty.options.utils.EasingFunction, kitty.options.utils.EasingFunction] = (0.0, kitty.options.utils.EasingFunction(), kitty.options.utils.EasingFunction())
+     visual_window_select_characters: str = '1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+diff --git a/kitty/state.c b/kitty/state.c
+index 5f93855cc..22bc70df6 100644
+--- a/kitty/state.c
++++ b/kitty/state.c
+@@ -573,6 +573,8 @@ remove_tab(id_type os_window_id, id_type id) {
+
+ static void
+ destroy_os_window_item(OSWindow *w) {
++    if (global_state.vertical_tab_bar_being_resized.os_window_id == w->id)
++        zero_at_ptr(&global_state.vertical_tab_bar_being_resized);
+     for (size_t t = w->num_tabs; t > 0; t--) {
+         Tab *tab = w->tabs + t - 1;
+         remove_tab_inner(w, tab->id);
+@@ -757,9 +759,15 @@ vertical_tab_bar_cols(const OSWindow *os_window, long margin_outer, long margin_
+     if (available_width <= 0) return 0;
+     unsigned available_cols = MAX(1u, (unsigned)available_width / cell_width);
+     unsigned title_cols = OPT(tab_title_max_length) > 0 ? (unsigned)OPT(tab_title_max_length) : 20u;
+-    unsigned desired_cols = title_cols + 8u;
++    unsigned desired_cols = os_window->vertical_tab_bar_width ? os_window->vertical_tab_bar_width :
++                            OPT(vertical_tab_bar_width) > 0 ? (unsigned)OPT(vertical_tab_bar_width) : title_cols + 8u;
+     unsigned soft_max = available_cols / 3u;
+     if (soft_max < 6u) soft_max = available_cols;
++    // Automatic sizing stays conservative. An explicit or interactively
++    // selected width may use more space, while always preserving 20 terminal
++    // columns on the other side of the divider.
++    if (os_window->vertical_tab_bar_width || OPT(vertical_tab_bar_width) > 0)
++        soft_max = available_cols > 20u ? available_cols - 20u : MAX(1u, available_cols / 2u);
+     return MAX(1u, MIN(available_cols, MIN(desired_cols, MAX(1u, soft_max))));
+ }
+
+@@ -1188,6 +1196,19 @@ end:
+     return Py_BuildValue("NNiiII", wrap_region(&central), wrap_region(&tab_bar), vw, vh, cell_width, cell_height);
+ }
+
++PYWRAP1(set_vertical_tab_bar_width) {
++    id_type os_window_id;
++    unsigned cols;
++    PA("KI", &os_window_id, &cols);
++    WITH_OS_WINDOW(os_window_id)
++    os_window->vertical_tab_bar_width = cols;
++    os_window->tab_bar_data_updated = false;
++    os_window->needs_render = true;
++    END_WITH_OS_WINDOW
++    wakeup_main_loop();
++    Py_RETURN_NONE;
++}
++
+ PYWRAP1(cell_size_for_window) {
+     id_type os_window_id;
+     unsigned int cell_width = 0, cell_height = 0;
+@@ -2068,6 +2089,7 @@ static PyMethodDef module_methods[] = {
+     MW(set_window_drag_overlay, METH_VARARGS),
+     MW(set_window_padding, METH_VARARGS),
+     MW(viewport_for_window, METH_VARARGS),
++    MW(set_vertical_tab_bar_width, METH_VARARGS),
+     MW(cell_size_for_window, METH_VARARGS),
+     MW(os_window_has_background_image, METH_VARARGS),
+     MW(mark_os_window_for_close, METH_VARARGS),
+diff --git a/kitty/state.h b/kitty/state.h
+index 38aaf8196..f3d6eb512 100644
+--- a/kitty/state.h
++++ b/kitty/state.h
+@@ -119,6 +119,8 @@ typedef struct Options {
+     float inactive_text_alpha;
+     Edge tab_bar_edge;
+     int tab_title_max_length;
++    int vertical_tab_bar_width;
++    bool vertical_tab_bar_resize;
+     DisableLigature disable_ligatures;
+     bool force_ltr;
+     bool resize_in_steps;
+@@ -532,6 +534,7 @@ typedef struct OSWindow {
+     bool has_received_cursor_pos_event;
+     double mouse_x, mouse_y;
+     double mouse_left_press_x, mouse_left_press_y;
++    unsigned vertical_tab_bar_width;
+     bool mouse_button_pressed[32];
+     bool has_too_few_tabs;
+     PyObject *window_title;
+@@ -643,6 +646,12 @@ typedef struct GlobalState {
+         bool drag_started;
+         double x, y;
+     } window_being_dragged;
++    struct {
++        id_type os_window_id;
++        unsigned initial_cols;
++        double initial_x;
++        Edge edge;
++    } vertical_tab_bar_being_resized;
+     struct {
+         uint32_t texture_id, framebuffer_id, texture_generation;
+         int width, height;
+diff --git a/kitty_tests/options.py b/kitty_tests/options.py
+index cd8245bdd..343a9e1f1 100644
+--- a/kitty_tests/options.py
++++ b/kitty_tests/options.py
+@@ -269,6 +269,9 @@ def keys_for_func(opts, name):
+     self.ae(opts.tab_bar_edge, LEFT_EDGE)
+     opts = p('tab_bar_edge right')
+     self.ae(opts.tab_bar_edge, RIGHT_EDGE)
++    opts = p('vertical_tab_bar_width 32', 'vertical_tab_bar_resize yes')
++    self.ae(opts.vertical_tab_bar_width, 32)
++    self.assertTrue(opts.vertical_tab_bar_resize)
+     opts = p('tab_bar_align start')
+     self.ae(opts.tab_bar_align, 'start')
+     opts = p('tab_bar_align end')
