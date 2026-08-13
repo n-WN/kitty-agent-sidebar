@@ -64,6 +64,90 @@ class SnapshotTests(unittest.TestCase):
                 }) + "\n")
                 self.assertEqual(snap._codex_rollout_state(str(p))[0], expected)
 
+    def test_codex_history_state_requires_projection_at_rollout_end(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            rollout = root / "rollout.jsonl"
+            rollout.write_bytes(b"line one\n")
+            database = root / "thread_history.sqlite"
+            import sqlite3
+            with sqlite3.connect(database) as connection:
+                connection.executescript("""
+                    CREATE TABLE thread_history_projection_state (
+                        thread_id TEXT PRIMARY KEY,
+                        next_rollout_byte_offset INTEGER NOT NULL,
+                        next_rollout_ordinal INTEGER NOT NULL
+                    );
+                    CREATE TABLE thread_turns (
+                        thread_id TEXT NOT NULL,
+                        turn_id TEXT NOT NULL,
+                        rollout_ordinal INTEGER NOT NULL,
+                        status TEXT NOT NULL,
+                        started_at INTEGER,
+                        completed_at INTEGER
+                    );
+                """)
+                connection.execute(
+                    "INSERT INTO thread_history_projection_state VALUES (?, ?, ?)",
+                    ("session", rollout.stat().st_size, 2),
+                )
+                connection.execute(
+                    "INSERT INTO thread_turns VALUES (?, ?, ?, ?, ?, ?)",
+                    ("session", "turn", 1, "completed", 10, 20),
+                )
+            with mock.patch.object(snap, "CODEX_HISTORY_DB", database):
+                self.assertEqual(
+                    snap._codex_history_state("session", str(rollout)),
+                    ("ready", 20_999_999_999, None),
+                )
+                rollout.write_bytes(b"line one\nnew line\n")
+                self.assertIsNone(snap._codex_history_state("session", str(rollout)))
+
+    def test_codex_history_state_maps_live_and_failed_turns(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            rollout = root / "rollout.jsonl"
+            rollout.write_bytes(b"x\n")
+            database = root / "thread_history.sqlite"
+            import sqlite3
+            with sqlite3.connect(database) as connection:
+                connection.executescript("""
+                    CREATE TABLE thread_history_projection_state (
+                        thread_id TEXT PRIMARY KEY,
+                        next_rollout_byte_offset INTEGER NOT NULL,
+                        next_rollout_ordinal INTEGER NOT NULL
+                    );
+                    CREATE TABLE thread_turns (
+                        thread_id TEXT NOT NULL,
+                        turn_id TEXT NOT NULL,
+                        rollout_ordinal INTEGER NOT NULL,
+                        status TEXT NOT NULL,
+                        started_at INTEGER,
+                        completed_at INTEGER
+                    );
+                """)
+                connection.execute(
+                    "INSERT INTO thread_history_projection_state VALUES (?, ?, ?)",
+                    ("session", rollout.stat().st_size, 2),
+                )
+                connection.execute(
+                    "INSERT INTO thread_turns VALUES (?, ?, ?, ?, ?, ?)",
+                    ("session", "turn", 1, "inProgress", 11, None),
+                )
+            with mock.patch.object(snap, "CODEX_HISTORY_DB", database):
+                self.assertEqual(
+                    snap._codex_history_state("session", str(rollout)),
+                    ("working", 11_999_999_999, None),
+                )
+                with sqlite3.connect(database) as connection:
+                    connection.execute(
+                        "UPDATE thread_turns SET status = 'failed', completed_at = 12"
+                    )
+                self.assertEqual(
+                    snap._codex_history_state("session", str(rollout)),
+                    ("error", 12_999_999_999, None),
+                )
+
     def test_append_is_durable_and_deduplicates_slot(self):
         with tempfile.TemporaryDirectory() as td:
             old = (snap.SNAPSHOT_DIR, snap.CURSOR_PATH)

@@ -108,13 +108,59 @@ class TabBarTests(unittest.TestCase):
         self.assertEqual(m["_seen_sequence"](window, state), 2)
 
     def test_newer_direct_state_repairs_same_session_hook(self):
-        m = load_tab_bar(); window = FakeWindow(self.raw)
+        m = load_tab_bar(); now = time.time_ns()
+        window = FakeWindow(json.dumps({
+            "v": 1, "i": "h", "k": "codex", "s": "ready", "q": 2,
+            "sid": "s", "o": 1, "u": 10, "c": now - 1, "p": "hook",
+        }))
         window.user_vars["agent_runtime_v1"] = json.dumps({
             "v": 1, "i": "r", "k": "codex", "s": "working", "q": 0,
-            "sid": "s", "o": 1, "u": 999, "p": "runtime", "c": time.time_ns(),
+            "sid": "s", "o": 1, "u": 1_000_000_010, "p": "runtime", "c": now,
         })
         self.assertEqual(m["_selected_state"](window).provenance, "runtime")
         self.assertEqual(m["_selected_state"](window).state, "working")
+
+    def test_new_capture_cannot_replay_older_runtime_boundary(self):
+        m = load_tab_bar(); now = time.time_ns()
+        window = FakeWindow(json.dumps({
+            "v": 1, "i": "h", "k": "codex", "s": "ready", "q": 2,
+            "sid": "s", "o": 1, "u": 20, "c": now - 1, "p": "hook",
+        }))
+        window.user_vars["agent_runtime_v1"] = json.dumps({
+            "v": 1, "i": "r", "k": "codex", "s": "working", "q": 0,
+            "sid": "s", "o": 1, "u": 10, "p": "runtime", "c": now,
+        })
+        selected = m["_selected_state"](window)
+        self.assertEqual(selected.provenance, "hook")
+        self.assertEqual(selected.state, "ready")
+
+    def test_same_second_terminal_runtime_repairs_working_hook(self):
+        m = load_tab_bar(); now = time.time_ns(); second = now // 1_000_000_000
+        window = FakeWindow(json.dumps({
+            "v": 1, "i": "h", "k": "codex", "s": "working", "q": 0,
+            "sid": "s", "o": 1, "u": second * 1_000_000_000 + 100,
+            "c": now - 1, "p": "hook",
+        }))
+        window.user_vars["agent_runtime_v1"] = json.dumps({
+            "v": 1, "i": "r", "k": "codex", "s": "ready", "q": 0,
+            "sid": "s", "o": 1, "u": (second + 1) * 1_000_000_000 - 1,
+            "p": "runtime", "c": now,
+        })
+        self.assertEqual(m["_selected_state"](window).state, "ready")
+
+    def test_same_second_working_runtime_cannot_rollback_ready_hook(self):
+        m = load_tab_bar(); now = time.time_ns(); second = now // 1_000_000_000
+        window = FakeWindow(json.dumps({
+            "v": 1, "i": "h", "k": "codex", "s": "ready", "q": 1,
+            "sid": "s", "o": 1, "u": second * 1_000_000_000 + 100,
+            "c": now - 1, "p": "hook",
+        }))
+        window.user_vars["agent_runtime_v1"] = json.dumps({
+            "v": 1, "i": "r", "k": "codex", "s": "working", "q": 0,
+            "sid": "s", "o": 1, "u": (second + 1) * 1_000_000_000 - 1,
+            "p": "runtime", "c": now,
+        })
+        self.assertEqual(m["_selected_state"](window).state, "ready")
 
     def test_live_runtime_replaces_stale_other_session(self):
         m = load_tab_bar(); window = FakeWindow(self.raw)
@@ -169,7 +215,8 @@ class TabBarTests(unittest.TestCase):
         }))
         window.user_vars["agent_runtime_v1"] = json.dumps({
             "v": 1, "i": "r", "k": "codex", "s": "working", "q": 0,
-            "sid": "live", "o": 1, "u": 1, "c": time.time_ns(), "p": "runtime",
+            "sid": "live", "o": 1, "u": old + 1_000_000_000,
+            "c": time.time_ns(), "p": "runtime",
         })
         self.assertEqual(m["_selected_state"](window).state, "working")
 

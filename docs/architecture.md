@@ -67,11 +67,15 @@ idempotent pane-local `SetUserVar` write for each new sequence. Rendering has no
 I/O, network I/O, or locks.
 
 Hook envelopes contain both `u` (the optional agent event timestamp) and `c` (the local bridge
-receipt timestamp). Cross-source ordering uses `c`, which is in the same clock domain as the
-collector. Direct runtime evidence has a 10-minute TTL. For the same Session and state, the
-Hook stays authoritative and retains unread semantics. If a later direct observation proves a
-different state for the same Session, runtime repairs the stale Hook. If both direct evidence
-and the Hook receipt are older than the TTL, the renderer hides the state. This prevents a
+receipt timestamp). `c` establishes attachment freshness; `u` orders lifecycle boundaries for
+the same Session. Direct runtime evidence has a 10-minute TTL. On Codex 0.147 or later, the
+collector uses Codex's `thread_history_1.sqlite` turn state only when its projection checkpoint
+exactly equals the current rollout size; otherwise it falls back to the bounded rollout tail.
+For the same Session and state, the Hook stays authoritative and retains unread semantics. If a
+direct observation contains a later lifecycle boundary for the same Session, runtime repairs
+the stale Hook. A newer capture of an older boundary cannot roll the Hook back. If both direct
+evidence and the Hook receipt are older than the TTL, the renderer hides the state. This
+prevents a
 SIGKILL, OOM, or power loss from leaving a permanent `working` state when `SessionEnd` cannot
 run.
 

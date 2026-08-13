@@ -18,6 +18,7 @@ import json
 import os
 import re
 import socket
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -47,6 +48,7 @@ UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 VALID_STATES = frozenset(("working", "ready", "action", "error", "disconnected", "unknown"))
 ROLLOUT_SCAN_CHUNK = 1024 * 1024
 ROLLOUT_SCAN_LIMIT = 64 * 1024 * 1024
+CODEX_HISTORY_DB = HOME / ".codex" / "thread_history_1.sqlite"
 
 
 def _boot_id() -> str:
@@ -417,7 +419,59 @@ def _reverse_rollout_lines(
             yield carry
 
 
-def _codex_rollout_state(path: str) -> tuple[str, int, str | None]:
+def _codex_history_state(
+    session_id: str, rollout_path: str
+) -> tuple[str, int, str | None] | None:
+    """Read Codex's own fully projected latest-turn state when available.
+
+    Codex 0.147 materializes durable ``TurnStarted``/``TurnComplete`` records
+    into ``thread_history_1.sqlite`` and advances the projection checkpoint in
+    the same transaction.  A row is authoritative only when that checkpoint
+    exactly equals the current rollout size; otherwise the database is behind
+    the live JSONL and the bounded rollout parser remains the source of truth.
+    """
+    try:
+        rollout_size = os.path.getsize(rollout_path)
+        uri = f"file:{CODEX_HISTORY_DB}?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=0.1) as connection:
+            projection = connection.execute(
+                "SELECT next_rollout_byte_offset "
+                "FROM thread_history_projection_state WHERE thread_id = ?",
+                (session_id,),
+            ).fetchone()
+            if projection is None or projection[0] != rollout_size:
+                return None
+            turn = connection.execute(
+                "SELECT status, started_at, completed_at "
+                "FROM thread_turns WHERE thread_id = ? "
+                "ORDER BY rollout_ordinal DESC LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        if turn is None:
+            return None
+        status, started_at, completed_at = turn
+        timestamp = completed_at if status != "inProgress" else started_at
+        # SQLite stores lifecycle seconds. Put the boundary at the end of that
+        # second so it compares conservatively with a Hook's nanosecond receipt
+        # timestamp from the same event.
+        state_ns = (
+            (int(timestamp) + 1) * 1_000_000_000 - 1
+            if isinstance(timestamp, int) and not isinstance(timestamp, bool) and timestamp > 0
+            else 0
+        )
+        states = {
+            "inProgress": "working", "completed": "ready",
+            "interrupted": "ready", "failed": "error",
+        }
+        state = states.get(status)
+        return (state, state_ns, None) if state else None
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        return None
+
+
+def _codex_rollout_state(
+    path: str, session_id: str | None = None
+) -> tuple[str, int, str | None]:
     """Read Codex's latest root-turn boundary, not title/screen heuristics.
 
     ``task_started``/``turn_started`` is No-Ready/working until the same root
@@ -426,6 +480,10 @@ def _codex_rollout_state(path: str) -> tuple[str, int, str | None]:
     carrying Codex's structured error is Error. If no boundary is found inside
     the bounded tail, report unknown rather than inventing a state.
     """
+    if session_id is not None:
+        projected = _codex_history_state(session_id, path)
+        if projected is not None:
+            return projected
     try:
         for raw in _reverse_rollout_lines(path):
             try:
@@ -484,7 +542,7 @@ def _codex_direct(pid: int) -> tuple[str | None, int, str, int, str, str | None]
     if len(session_ids) == 1 and len(roots) == 1:
         sid, (opened_ns, path) = next(iter(roots.items()))
         if sid in session_ids:
-            state, state_ns, state_error = _codex_rollout_state(path)
+            state, state_ns, state_error = _codex_rollout_state(path, sid)
             return sid, opened_ns, state, state_ns, "codex_open_rollout_runtime", state_error
     return (
         None, 0, "unknown", 0, "unavailable",

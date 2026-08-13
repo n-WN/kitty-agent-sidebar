@@ -150,10 +150,21 @@ def _selected_state(window: Any) -> AgentState | None:
         return None if hook_is_unverified else hook
     if runtime.session_id == hook.session_id:
         # A fresh direct observation proves that the old Hook still belongs
-        # to a live session. If the collector started after the Hook and now
-        # observes a different runtime state, runtime is the newer fact.
-        if runtime.state != hook.state and runtime.captured_ns > hook.captured_ns:
-            return runtime
+        # to a live session. Its state timestamp is the Codex/Claude lifecycle
+        # boundary, while capture time is freshness only. A later collector
+        # must not let an older runtime boundary roll back a newer Hook.
+        if runtime.state != hook.state:
+            # Codex's projected history stores lifecycle timestamps in whole
+            # seconds. Treat boundaries in the same second as one event and
+            # let direct terminal state repair Working; a same-second Working
+            # boundary cannot roll a terminal Hook back.
+            same_second = runtime.updated_ns // 1_000_000_000 == hook.updated_ns // 1_000_000_000
+            runtime_is_terminal = runtime.state in ('ready', 'error')
+            hook_is_terminal = hook.state in ('ready', 'error')
+            if runtime.updated_ns > hook.updated_ns and (
+                not same_second or runtime_is_terminal or not hook_is_terminal
+            ):
+                return runtime
         return hook
     # A new Hook can arrive between collector cycles. Its arrival is stronger
     # than an older runtime observation from the previous foreground session.
