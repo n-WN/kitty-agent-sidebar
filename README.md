@@ -64,6 +64,7 @@ include sidebar.conf
 
 The installer copies `sidebar.conf`, `tab_bar.py`, and the watcher. It does not edit
 `kitty.conf`, the user's theme, or key maps. Reload Kitty config after adding the include.
+It creates the filesystem-socket parent with mode `0700` before Kitty binds the socket.
 
 The installer merges only its marked Hook commands into `~/.codex/hooks.json` and
 `~/.claude/settings.json`. It preserves unrelated settings and Hooks. Existing conflicting

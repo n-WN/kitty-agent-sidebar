@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 - 2026-08-14
+
+- Create and validate the private Kitty socket parent during installation so a clean machine
+  can bind the configured filesystem socket.
+- Add a regression test for a clean install and reject a symlink socket directory.
+
 ## 0.1.0 - 2026-08-14
 
 - Add event-driven Codex CLI and Claude Code state in Kitty vertical tabs.

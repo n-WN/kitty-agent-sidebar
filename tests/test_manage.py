@@ -29,6 +29,7 @@ class ManageTests(unittest.TestCase):
         home = root / "home"
         bin_dir = home / ".local" / "bin"
         kitty_dir = home / ".config" / "kitty"
+        socket_dir = home / ".local" / "state" / "kitty-agent-status"
         private = home / "private"
         install_root = private / "install"
         codex = home / ".codex" / "hooks.json"
@@ -45,6 +46,7 @@ class ManageTests(unittest.TestCase):
         }
         patches = {
             "HOME": home, "BIN_DIR": bin_dir, "KITTY_DIR": kitty_dir,
+            "SOCKET_DIR": socket_dir,
             "CODEX_HOOKS": codex, "CLAUDE_SETTINGS": claude,
             "PLIST": plist, "PRIVATE_ROOT": private,
             "INSTALL_ROOT": install_root, "MANIFEST": install_root / "manifest.json",
@@ -152,6 +154,7 @@ class ManageTests(unittest.TestCase):
                 manage.install()
                 self.assertEqual(manage.doctor(), 0)
                 self.assertTrue(manage.MANIFEST.is_file())
+                self.assertEqual(values["SOCKET_DIR"].stat().st_mode & 0o777, 0o700)
                 groups = json.loads(codex.read_text())["hooks"]["Stop"]
                 commands = [item["command"] for group in groups for item in group["hooks"]]
                 self.assertIn("/bin/echo keep-codex", commands)
@@ -165,6 +168,16 @@ class ManageTests(unittest.TestCase):
             commands = [item["command"] for group in groups for item in group["hooks"]]
             self.assertEqual(commands, ["/bin/echo keep-codex"])
             self.assertEqual(json.loads(claude.read_text()), {"env": {"KEEP": "1"}})
+
+    def test_private_socket_directory_rejects_symlink(self):
+        with tempfile.TemporaryDirectory() as td:
+            td = pathlib.Path(td)
+            target = td / "target"
+            target.mkdir()
+            link = td / "socket-dir"
+            link.symlink_to(target, target_is_directory=True)
+            with self.assertRaises(OSError):
+                manage.ensure_private_dir(link)
 
 
 if __name__ == "__main__":

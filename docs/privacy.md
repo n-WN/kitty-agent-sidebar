@@ -15,3 +15,6 @@ after 24 hours. Each JSONL record is appended through `O_APPEND`, followed by `f
 Readers must ignore a truncated final line after an unclean shutdown.
 
 The installer does not delete snapshots on uninstall. Removal is an explicit user action.
+
+The Kitty remote-control socket is under `~/.local/state/kitty-agent-status/`. The installer
+creates and validates that parent as a same-user, non-symlink directory with mode `0700`.

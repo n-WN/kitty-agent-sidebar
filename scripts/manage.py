@@ -10,6 +10,7 @@ import os
 import plistlib
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -22,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HOME = Path.home()
 BIN_DIR = HOME / ".local" / "bin"
 KITTY_DIR = Path(os.environ.get("KITTY_CONFIG_DIRECTORY", HOME / ".config" / "kitty"))
+SOCKET_DIR = HOME / ".local" / "state" / "kitty-agent-status"
 CODEX_HOOKS = HOME / ".codex" / "hooks.json"
 CLAUDE_SETTINGS = HOME / ".claude" / "settings.json"
 PLIST = HOME / "Library" / "LaunchAgents" / f"{LABEL}.plist"
@@ -72,6 +74,26 @@ def atomic_json(path: Path, value: Any) -> None:
     atomic_bytes(
         path, (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode(), 0o600
     )
+
+
+def ensure_private_dir(path: Path) -> None:
+    """Create a same-user directory without accepting a symlink target."""
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_uid != os.getuid():
+        raise OSError(f"unsafe private directory: {path}")
+    os.chmod(path, 0o700)
+
+
+def private_dir_ok(path: Path) -> bool:
+    try:
+        info = path.lstat()
+        return (
+            stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode) and
+            info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700
+        )
+    except OSError:
+        return False
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -263,7 +285,11 @@ def launchctl(action: str) -> None:
 
 
 def install(force: bool = False) -> None:
-    INSTALL_ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
+    ensure_private_dir(INSTALL_ROOT)
+    # Kitty binds this filesystem socket after config reload. bind(2) does not
+    # create its parent, and socket-only RC is unconditional, so keep the
+    # parent private before Kitty starts listening.
+    ensure_private_dir(SOCKET_DIR)
     manifest = load_manifest()
     conflicts = find_managed_conflicts(manifest)
     if conflicts and not force:
@@ -337,6 +363,7 @@ def doctor() -> int:
         "watcher": (KITTY_DIR / "agent_status_watcher.py").is_file(),
         "codex_hooks": CODEX_HOOKS.is_file(), "claude_hooks": CLAUDE_SETTINGS.is_file(),
         "launch_agent": sys.platform != "darwin" or PLIST.is_file(),
+        "socket_directory": private_dir_ok(SOCKET_DIR),
         "manifest": MANIFEST.is_file() and manifest.get("schema") == 1,
     }
     for name, ok in checks.items():
@@ -349,7 +376,7 @@ def main() -> int:
     parser.add_argument("command", choices=("install", "uninstall", "doctor"))
     parser.add_argument("--force", action="store_true", help="back up and replace user-modified managed files")
     args = parser.parse_args()
-    INSTALL_ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
+    ensure_private_dir(INSTALL_ROOT)
     with INSTALL_LOCK.open("a+", encoding="utf-8") as lock:
         os.chmod(INSTALL_LOCK, 0o600)
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
