@@ -10,6 +10,8 @@ An unread agent event stays visible in a background tab. Selecting that tab clea
 agent dot only when the pane is in the selected tab of the focused, visible Kitty OS window.
 The active rail and the unread dot are separate cells and separate states.
 
+![Kitty Agent Sidebar showing fixed status columns, unread markers, and a Codex session](docs/assets/kitty-agent-sidebar.png)
+
 ## Display
 
 Each row uses the same three-cell prefix:
