@@ -52,6 +52,10 @@ cd ~/.codex-work/kitty-agent-sidebar
 ./scripts/manage.py install
 ```
 
+Do not use `pip install`. `pyproject.toml` provides project metadata and build-tool support,
+but a Python wheel cannot merge the official Agent Hooks, install the Kitty files, or load the
+LaunchAgent. `scripts/manage.py` is the supported installer.
+
 Add this line to `kitty.conf`:
 
 ```conf
@@ -98,7 +102,8 @@ Apply it to a matching Kitty 0.48 source tree, build Kitty, and then enable:
 vertical_tab_bar_resize yes
 ```
 
-The patch is optional and GPL-3.0-only. See [architecture](docs/architecture.md).
+The patch is optional and GPL-3.0-only. See [patch applicability](patches/README.md) and
+[architecture](docs/architecture.md).
 
 `patches/kitty-macos-menubar-chevron.patch` is a separate optional macOS preference. It
 uses `>` instead of Kitty's `::` before the dynamic menu-bar title. It is not part of the
@@ -131,6 +136,12 @@ Read [privacy](docs/privacy.md) before publishing or sharing a snapshot.
 python3 -m compileall -q src kitty scripts tests
 ```
 
+The macOS CI matrix tests Python 3.9 and a current Python release. A separate job verifies
+that both optional patches apply to the pinned Kitty commit.
+
+For security reports, see [SECURITY.md](SECURITY.md). Do not attach private snapshots or
+Session IDs to a public issue.
+
 The authoritative local Kitty patch was generated from commit
 `e95da80fdbbf317917a106c8e1bcf8032c875c80` plus the listed changes. Rebase and rerun Kitty's
 option tests before using it with a different source revision.
@@ -138,3 +149,5 @@ option tests before using it with a different source revision.
 ## License
 
 GPL-3.0-only. See `LICENSE` and `NOTICE`.
+
+Release changes are recorded in [CHANGELOG.md](CHANGELOG.md).

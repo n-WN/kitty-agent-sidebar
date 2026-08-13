@@ -25,6 +25,35 @@ manage = load("manage_test", ROOT / "scripts/manage.py")
 
 
 class ManageTests(unittest.TestCase):
+    def sandbox_install(self, root: pathlib.Path):
+        home = root / "home"
+        bin_dir = home / ".local" / "bin"
+        kitty_dir = home / ".config" / "kitty"
+        private = home / "private"
+        install_root = private / "install"
+        codex = home / ".codex" / "hooks.json"
+        claude = home / ".claude" / "settings.json"
+        plist = home / "Library" / "LaunchAgents" / f"{manage.LABEL}.plist"
+        bridge = bin_dir / "kitty-agent-status"
+        snapshot = bin_dir / "kitty-agent-snapshot"
+        sources = {
+            bridge: ROOT / "src/kitty_agent_sidebar/hook_bridge.py",
+            snapshot: ROOT / "src/kitty_agent_sidebar/snapshot.py",
+            kitty_dir / "tab_bar.py": ROOT / "kitty/tab_bar.py",
+            kitty_dir / "agent_status_watcher.py": ROOT / "kitty/agent_status_watcher.py",
+            kitty_dir / "sidebar.conf": ROOT / "kitty/sidebar.conf",
+        }
+        patches = {
+            "HOME": home, "BIN_DIR": bin_dir, "KITTY_DIR": kitty_dir,
+            "CODEX_HOOKS": codex, "CLAUDE_SETTINGS": claude,
+            "PLIST": plist, "PRIVATE_ROOT": private,
+            "INSTALL_ROOT": install_root, "MANIFEST": install_root / "manifest.json",
+            "INSTALL_LOCK": install_root / "install.lock",
+            "BACKUP_ROOT": install_root / "backups", "BRIDGE": bridge,
+            "SNAPSHOT": snapshot, "MANAGED_SOURCES": sources,
+        }
+        return patches
+
     def test_hook_ownership_is_exact_and_supports_v0_upgrade(self):
         path = str(manage.BRIDGE)
         self.assertTrue(manage.hook_owned({"command": f"{path} managed-v1 codex stop"}))
@@ -98,6 +127,44 @@ class ManageTests(unittest.TestCase):
                     raise RuntimeError("fail")
             self.assertEqual(one.read_text(), "one")
             self.assertFalse(two.exists())
+
+    def test_full_install_doctor_uninstall_round_trip(self):
+        with tempfile.TemporaryDirectory() as td:
+            td = pathlib.Path(td)
+            values = self.sandbox_install(td)
+            codex = values["CODEX_HOOKS"]
+            claude = values["CLAUDE_SETTINGS"]
+            tab_bar = values["KITTY_DIR"] / "tab_bar.py"
+            codex.parent.mkdir(parents=True)
+            claude.parent.mkdir(parents=True)
+            tab_bar.parent.mkdir(parents=True)
+            original_tab_bar = b"# user tab bar\n"
+            tab_bar.write_bytes(original_tab_bar)
+            codex.write_text(json.dumps({
+                "hooks": {"Stop": [{"hooks": [{
+                    "type": "command", "command": "/bin/echo keep-codex",
+                }]}]},
+            }))
+            claude.write_text(json.dumps({"env": {"KEEP": "1"}}))
+            with mock.patch.multiple(manage, **values), mock.patch.object(
+                manage, "launchctl"
+            ), redirect_stdout(StringIO()):
+                manage.install()
+                self.assertEqual(manage.doctor(), 0)
+                self.assertTrue(manage.MANIFEST.is_file())
+                groups = json.loads(codex.read_text())["hooks"]["Stop"]
+                commands = [item["command"] for group in groups for item in group["hooks"]]
+                self.assertIn("/bin/echo keep-codex", commands)
+                self.assertTrue(any("managed-v1 codex stop" in item for item in commands))
+                self.assertEqual(json.loads(claude.read_text())["env"], {"KEEP": "1"})
+                manage.uninstall()
+            self.assertEqual(tab_bar.read_bytes(), original_tab_bar)
+            self.assertFalse(values["BRIDGE"].exists())
+            self.assertFalse(values["SNAPSHOT"].exists())
+            groups = json.loads(codex.read_text())["hooks"]["Stop"]
+            commands = [item["command"] for group in groups for item in group["hooks"]]
+            self.assertEqual(commands, ["/bin/echo keep-codex"])
+            self.assertEqual(json.loads(claude.read_text()), {"env": {"KEEP": "1"}})
 
 
 if __name__ == "__main__":

@@ -146,7 +146,7 @@ def merge_hooks(path: Path, template: Path, bridge_paths: set[str] | None = None
     atomic_json(path, current)
 
 
-def remove_hooks(path: Path, bridge_paths: set[str]) -> None:
+def remove_hooks(path: Path, bridge_paths: set[str], remove_empty_root: bool = False) -> None:
     if not path.exists():
         return
     current = load_json(path)
@@ -171,6 +171,9 @@ def remove_hooks(path: Path, bridge_paths: set[str]) -> None:
             if groups:
                 changed = True
             hooks.pop(event, None)
+    if remove_empty_root and not hooks:
+        current.pop("hooks", None)
+        changed = True
     if changed:
         atomic_json(path, current)
 
@@ -178,9 +181,10 @@ def remove_hooks(path: Path, bridge_paths: set[str]) -> None:
 def load_manifest() -> dict[str, Any]:
     value = load_json(MANIFEST)
     if value.get("schema") != 1:
-        return {"schema": 1, "files": {}, "bridge_paths": []}
+        return {"schema": 1, "files": {}, "bridge_paths": [], "hook_roots": {}}
     value.setdefault("files", {})
     value.setdefault("bridge_paths", [])
+    value.setdefault("hook_roots", {})
     return value
 
 
@@ -274,6 +278,10 @@ def install(force: bool = False) -> None:
     # versions are retained in the existing manifest backup records.
     with rollback_files([CODEX_HOOKS, CLAUDE_SETTINGS, MANIFEST]):
         install_managed_files(manifest, force)
+        hook_roots = manifest.setdefault("hook_roots", {})
+        for path in (CODEX_HOOKS, CLAUDE_SETTINGS):
+            if str(path) not in hook_roots:
+                hook_roots[str(path)] = {"hooks_present": "hooks" in load_json(path)}
         merge_hooks(CODEX_HOOKS, ROOT / "hooks" / "codex-hooks.template.json", old_paths)
         merge_hooks(CLAUDE_SETTINGS, ROOT / "hooks" / "claude-hooks.template.json", old_paths)
         install_plist(manifest, force)
@@ -288,8 +296,13 @@ def uninstall() -> None:
     manifest = load_manifest()
     paths = {str(item) for item in manifest.get("bridge_paths", []) if isinstance(item, str)}
     paths.add(str(BRIDGE))
-    remove_hooks(CODEX_HOOKS, paths)
-    remove_hooks(CLAUDE_SETTINGS, paths)
+    hook_roots = manifest.get("hook_roots", {})
+    for config in (CODEX_HOOKS, CLAUDE_SETTINGS):
+        baseline = hook_roots.get(str(config), {}) if isinstance(hook_roots, dict) else {}
+        remove_hooks(
+            config, paths,
+            remove_empty_root=isinstance(baseline, dict) and baseline.get("hooks_present") is False,
+        )
     launchctl("unload")
     preserved: list[str] = []
     for raw_path, record in manifest.get("files", {}).items():

@@ -1,0 +1,42 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Python ${{ matrix.python-version }} on macOS
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Compile
+        run: python -m compileall -q src kitty scripts tests
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+
+  patch:
+    name: Kitty patch applicability
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch pinned Kitty source
+        run: |
+          git init "$RUNNER_TEMP/kitty"
+          git -C "$RUNNER_TEMP/kitty" remote add origin https://github.com/kovidgoyal/kitty.git
+          git -C "$RUNNER_TEMP/kitty" fetch --depth=1 origin e95da80fdbbf317917a106c8e1bcf8032c875c80
+          git -C "$RUNNER_TEMP/kitty" checkout --detach FETCH_HEAD
+      - name: Check optional patches
+        run: |
+          git -C "$RUNNER_TEMP/kitty" apply --check "$GITHUB_WORKSPACE/patches/kitty-0.48-vertical-sidebar-resize.patch"
+          git -C "$RUNNER_TEMP/kitty" apply --check "$GITHUB_WORKSPACE/patches/kitty-macos-menubar-chevron.patch"

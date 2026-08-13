@@ -9,6 +9,11 @@
 | Python | 3.9 | macOS system Python is supported |
 | macOS | 13+ target | launchd, `lsof`, and `LOCAL_PEERPID` are used |
 
+The macOS 13 floor is a target, not a full release matrix. The initial live validation used
+macOS 26.5.1, system Python 3.9.6, and Kitty 0.48.2. CI validates Python 3.9 and a current
+Python release on a hosted macOS runner. Reports from other supported macOS releases are
+welcome.
+
 The live Hook and renderer are not tied to one Kitty process. Each Kitty pane inherits its
 own `KITTY_PID` and `KITTY_WINDOW_ID`; OSC targets that pane. The collector enumerates all
 owned Kitty GUI instances.

@@ -1,4 +1,6 @@
 [build-system]
+# This supports source metadata and development tooling. It is not the product
+# installer; use scripts/manage.py so Hooks, Kitty files, and launchd agree.
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
