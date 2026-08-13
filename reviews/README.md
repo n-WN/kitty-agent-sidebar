@@ -24,3 +24,8 @@ Release changes accepted from review:
 Two additional reviews were run through Pi with `claude-fable-5`; a second independent
 check used `kimi-k3`. Raw outputs remain ignored under `.local/model-reviews/`. Findings
 that contradicted inspected Kitty/Codex runtime behavior were not accepted.
+
+The final Fable reassessment returned `ACCEPT` with no remaining P0/P1 finding after the
+GPL license, local clock domain, Base64 OSC transport, ambiguous-root behavior, and marker
+tests were supplied as evidence. Its two accepted beta limits are a possible wall-clock step
+and the 10-minute upper bound for hiding a Hook left by `SIGKILL`.
